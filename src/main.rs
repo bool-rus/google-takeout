@@ -121,6 +121,7 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
     let tar_meta = TarMeta::new(&path, size);
     if let Some(ex) = path.extension() {
         if ex.to_str() == Some("json") {
+            log::info!("Founded json: {}", path.to_string_lossy());
             let mut buf = String::with_capacity(size as usize);
             entry.read_to_string(&mut buf)?;
             if let Err(e) = process_json(lib, &path, buf.as_str()) {
