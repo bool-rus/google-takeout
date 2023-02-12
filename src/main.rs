@@ -1,12 +1,12 @@
 use std::process::exit;
 use std::collections::{HashSet, HashMap};
 use std::path::PathBuf;
-use std::io::{Read, BufReader, BufRead, Write};
+use std::io::{Read, Write};
 use std::time::SystemTime;
 
 
 use anyhow::Result;
-use chrono::{TimeZone, Datelike};
+use chrono::TimeZone;
 use libflate::gzip::Decoder;
 use serde::Deserialize;
 use tar::{Archive, Entry};
@@ -14,6 +14,10 @@ use xxhash_rust::xxh64::Xxh64;
 
 type FileHash = u64;
 type DateTime = chrono::DateTime<chrono::Local>;
+
+const TAKEOUT: &str = "takeout";
+const CURRENT: &str = "current";
+const DATE_FORMAT: &str = "%Y/%m/%d/%Y%m%d_%H%M%S";
 
 
 fn main() {
@@ -30,25 +34,51 @@ fn main() {
             }
         }
     }
-    println!("albums:");
+    log::info!("albums:");
     for name in lib.albums.keys() {
         println!("\t{name}");
     }
-    println!("duplicates_counter: {}", lib.duplicates_counter);
+    log::info!("duplicates_counter: {}", lib.duplicates_counter);
 
-    println!("start postprocessing");
+    log::info!("analyse dates");
     let result = lib.analyze();
-    update_folder(result).unwrap();
+    update_folder(&result).unwrap();
+    log::info!("save albums");
+    for (name, album) in result.albums {
+        save_album(name, album, &result.files).unwrap();
+    }
 
 }
 
-fn update_folder(result: AnalyzeResult) -> Result<()> {
-    for (hash, (extension, meta)) in result.files {
-        let date: chrono::DateTime<chrono::Local> = meta.taken_time.into();
-        let from_path = PathBuf::from(format!("takeout/{hash:016x}"));
-        let to_path = PathBuf::from(date.format("takeout/%Y/%m/%d/%Y%m%d_%H%M%S").to_string());
-        let to_path = to_path.with_extension(extension);
-        std::fs::create_dir_all(to_path.parent().unwrap())?;
+fn save_album(name: String, album: Album, map: &HashMap<FileHash, (PathBuf, Metadata)>) -> Result<()> {
+    let mut file = std::fs::File::create(name)?;
+    for hash in album.files {
+        if let Some((ex, md)) = map.get(&hash) {
+            let path = make_path(ex, &md.taken_time);
+            file.write_all(path.to_string_lossy().as_bytes())?;
+            file.write_all("\n".as_bytes())?;
+        }
+    }
+    file.flush()?;
+    Ok(())
+}
+
+fn make_path(extension: &PathBuf, dt: &DateTime) -> PathBuf {
+    let mut path = PathBuf::from(TAKEOUT);
+    path.push(dt.format(DATE_FORMAT).to_string());
+    path.with_extension(extension)
+
+}
+
+fn update_folder(result: &AnalyzeResult) -> Result<()> {
+    for (hash, (extension, meta)) in &result.files {
+        let date = meta.taken_time;
+        let mut from_path = PathBuf::from(TAKEOUT);
+        from_path.push(format!("{hash:016x}"));
+        let to_path = make_path(extension, &date);
+        if let Some(parent) = to_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::rename(from_path, to_path.clone())?;
         let st: SystemTime = date.into();
         filetime::set_file_mtime(to_path, st.into())?;
@@ -77,7 +107,6 @@ fn process_stdin(lib: &mut Library) -> Result<bool> {
 fn process_json(lib: &mut Library, path: &PathBuf, text: &str) -> Result<()> {
     let meta: Metadata = serde_json::from_str(text)?;
     lib.add_meta(path.clone(), meta);
-    log::warn!("json founded!");
     return Ok(());
 }
 
@@ -89,7 +118,6 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
     }
     let mtime = entry.header().mtime().ok();
     let path = entry.path()?.to_path_buf();
-    let pathstr = path.to_string_lossy();
     let tar_meta = TarMeta::new(&path, size);
     if let Some(ex) = path.extension() {
         if ex.to_str() == Some("json") {
@@ -102,11 +130,12 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
             return Ok(());
         }
     }
+    let current_path = format!("{TAKEOUT}/{CURRENT}");
     let lib_hash = lib.find_duplicates(&tar_meta);
     let mut hasher = if lib_hash.is_some() {
         HashedWrite::new()
     } else {
-        let file = std::fs::File::create("takeout/current")?;
+        let file = std::fs::File::create(&current_path)?;
         HashedWrite::with_write(file)
     };
     std::io::copy(&mut entry, &mut hasher)?;
@@ -115,10 +144,10 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
 
     if let Some(_file) = hasher.writer() {
         if is_duplicate {
-            std::fs::remove_file("takeout/current")?;
+            std::fs::remove_file(&current_path)?;
         } else  {
-            let save_path = PathBuf::from(format!("takeout/{hash:016x}"));
-            std::fs::rename("takeout/current", save_path)?;
+            let save_path = PathBuf::from(format!("{TAKEOUT}/{hash:016x}"));
+            std::fs::rename(&current_path, save_path)?;
         }
     }
     if let Some(lib_hash) = lib_hash {
@@ -126,6 +155,7 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
             log::error!("Different files with same size and name");
         }
     }
+    log::info!("{hash:016x} {}", path.to_string_lossy());
     Ok(())
 }
 
@@ -217,7 +247,7 @@ impl Library {
                 }
             }
         }
-        AnalyzeResult { unknown_hashes, files }
+        AnalyzeResult { unknown_hashes, files, albums}
     }
 }
 
@@ -234,7 +264,8 @@ fn find_meta(map: &HashMap<PathBuf, Metadata>, path: &PathBuf) -> Option<Metadat
 }
 struct AnalyzeResult {
     unknown_hashes: Vec<FileHash>,
-    files: HashMap<FileHash, (PathBuf, Metadata)>
+    files: HashMap<FileHash, (PathBuf, Metadata)>,
+    albums: HashMap<String, Album>,
 }
 
 
