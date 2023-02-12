@@ -2,22 +2,23 @@ use std::process::exit;
 use std::collections::{HashSet, HashMap};
 use std::path::PathBuf;
 use std::io::{Read, BufReader, BufRead, Write};
+use std::time::SystemTime;
 
 
 use anyhow::Result;
-use chrono::TimeZone;
+use chrono::{TimeZone, Datelike};
 use libflate::gzip::Decoder;
 use serde::Deserialize;
 use tar::{Archive, Entry};
 use xxhash_rust::xxh64::Xxh64;
 
 type FileHash = u64;
-type DateTime = chrono::DateTime<chrono::Utc>;
+type DateTime = chrono::DateTime<chrono::Local>;
 
 
 fn main() {
     simple_logger::SimpleLogger::new().env().init().unwrap();
-    std::fs::create_dir_all("takeout");
+    std::fs::create_dir_all("takeout").unwrap();
     let mut lib = Library::default();
     loop {
         match process_stdin(&mut lib) {
@@ -34,6 +35,25 @@ fn main() {
         println!("\t{name}");
     }
     println!("duplicates_counter: {}", lib.duplicates_counter);
+
+    println!("start postprocessing");
+    let result = lib.analyze();
+    update_folder(result).unwrap();
+
+}
+
+fn update_folder(result: AnalyzeResult) -> Result<()> {
+    for (hash, (extension, meta)) in result.files {
+        let date: chrono::DateTime<chrono::Local> = meta.taken_time.into();
+        let from_path = PathBuf::from(format!("takeout/{hash:016x}"));
+        let to_path = PathBuf::from(date.format("takeout/%Y/%m/%d/%Y%m%d_%H%M%S").to_string());
+        let to_path = to_path.with_extension(extension);
+        std::fs::create_dir_all(to_path.parent().unwrap())?;
+        std::fs::rename(from_path, to_path.clone())?;
+        let st: SystemTime = date.into();
+        filetime::set_file_mtime(to_path, st.into())?;
+    }
+    Ok(())
 }
 
 fn process_stdin(lib: &mut Library) -> Result<bool> {
@@ -64,6 +84,10 @@ fn process_json(lib: &mut Library, path: &PathBuf, text: &str) -> Result<()> {
 fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -> Result<()> {
 
     let size = entry.size();
+    if size == 0 {
+        return Ok(())
+    }
+    let mtime = entry.header().mtime().ok();
     let path = entry.path()?.to_path_buf();
     let pathstr = path.to_string_lossy();
     let tar_meta = TarMeta::new(&path, size);
@@ -93,10 +117,7 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
         if is_duplicate {
             std::fs::remove_file("takeout/current")?;
         } else  {
-            let mut save_path = PathBuf::from(format!("takeout/{hash:016x}"));
-            if let Some(ex) = path.extension() {
-                save_path = save_path.with_extension(ex);
-            }
+            let save_path = PathBuf::from(format!("takeout/{hash:016x}"));
             std::fs::rename("takeout/current", save_path)?;
         }
     }
@@ -105,9 +126,6 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
             log::error!("Different files with same size and name");
         }
     }
-
-    // Inspect metadata about the file
-    log::info!("{hash:016x}: {pathstr}");
     Ok(())
 }
 
@@ -139,6 +157,15 @@ struct Library {
     meta: HashMap<PathBuf, Metadata>,
 }
 
+fn next_stem(path: &PathBuf) -> Option<PathBuf> {
+    let next = path.with_extension("");
+    if &next == path {
+        None
+    } else {
+        Some(next)
+    }
+}
+
 impl Library {
     pub fn find_duplicates(&mut self, meta: &TarMeta) -> Option<FileHash> {
         self.files_by_tar_meta.get(meta).copied()
@@ -147,16 +174,10 @@ impl Library {
         let key = TarMeta::new(&path, size);
         self.files_by_tar_meta.insert(key, hash);
     }
-    pub fn add_meta(&mut self, path: PathBuf, meta: Metadata) {
-        let mut prev_stem = path.clone();
-        loop {
-            let stem = prev_stem.with_extension("");
-            if stem == prev_stem {
-                break;
-            } else {
-                prev_stem = stem.clone();
-                self.meta.insert(stem, meta.clone());
-            }
+    pub fn add_meta(&mut self, mut path: PathBuf, meta: Metadata) {
+        while let Some(next) = next_stem(&path) {
+            path = next;
+            self.meta.insert(path.clone(), meta.clone());
         }
     }
     pub fn add_file(&mut self, path: PathBuf, hash: FileHash, size: u64) -> bool {
@@ -181,7 +202,41 @@ impl Library {
 
         is_duplicate
     }
+
+    pub fn analyze(self) -> AnalyzeResult {
+        let mut files = HashMap::default();
+        let mut unknown_hashes = Vec::new();
+        let Library { duplicates_counter, mut files_by_hash, files_by_path, files_by_tar_meta, albums, meta } = self;
+        for (path, hash) in files_by_path {
+            let ex = path.extension().map(PathBuf::from).unwrap_or(PathBuf::from(""));
+            if let Some(x) = files_by_hash.remove(&hash) {
+                if let Some(metadata) = find_meta(&meta, &path) {
+                    files.insert(hash, (ex, metadata));
+                } else {
+                    unknown_hashes.push(hash);
+                }
+            }
+        }
+        AnalyzeResult { unknown_hashes, files }
+    }
 }
+
+fn find_meta(map: &HashMap<PathBuf, Metadata>, path: &PathBuf) -> Option<Metadata> {
+    let mut path = path.clone();
+    while let Some(next) = next_stem(&path) {
+        path = next;
+        let metadata = map.get(&path);
+        if metadata.is_some() {
+            return metadata.cloned();
+        }
+    }
+    None
+}
+struct AnalyzeResult {
+    unknown_hashes: Vec<FileHash>,
+    files: HashMap<FileHash, (PathBuf, Metadata)>
+}
+
 
 
 #[derive(Clone, Debug, Deserialize)]
@@ -203,7 +258,7 @@ pub fn property_to_float<'de, D>(deserializer: D) -> Result<DateTime, D::Error>
     let helper = TakenTime::deserialize(deserializer)?;
     
     let value = helper.timestamp.parse::<i64>().unwrap();
-    let r = chrono::Utc.timestamp_opt(value, 0).unwrap();
+    let r = chrono::Local.timestamp_opt(value, 0).unwrap();
     Ok(r)
 }
 
@@ -260,4 +315,13 @@ impl <W: Write> Write for HashedWrite<W> {
     fn flush(&mut self) -> std::io::Result<()> {
         self.write.as_mut().map(|w|w.flush()).unwrap_or(Ok(()))
     }
+}
+
+#[test]
+fn test_format() {
+    let dt = chrono::Utc::now();
+    let dt_utc: DateTime = dt.into();
+    assert_eq!(dt.timestamp(), dt_utc.timestamp());
+    let dt_str = dt.format("%Y/%m/%d/%Y%m%d_%H%M%S").to_string();
+    println!("{dt_str}");
 }
