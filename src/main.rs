@@ -54,6 +54,13 @@ fn process_stdin(lib: &mut Library) -> Result<bool> {
     Ok(false)
 }
 
+fn process_json(lib: &mut Library, path: &PathBuf, text: &str) -> Result<()> {
+    let meta: Metadata = serde_json::from_str(text)?;
+    lib.add_meta(path.clone(), meta);
+    log::warn!("json founded!");
+    return Ok(());
+}
+
 fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -> Result<()> {
 
     let size = entry.size();
@@ -64,9 +71,10 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
         if ex.to_str() == Some("json") {
             let mut buf = String::with_capacity(size as usize);
             entry.read_to_string(&mut buf)?;
-            let meta: Metadata = serde_json::from_str(buf.as_str())?;
-            lib.add_meta(path, meta);
-            log::warn!("json founded!");
+            if let Err(e) = process_json(lib, &path, buf.as_str()) {
+                log::error!("Err on process {}: {e}", path.to_string_lossy());
+                log::trace!("json: {buf}");
+            }
             return Ok(());
         }
     }
