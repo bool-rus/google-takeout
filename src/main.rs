@@ -245,12 +245,25 @@ impl Library {
             let ex = paths.first().unwrap().extension().map(PathBuf::from).unwrap_or(PathBuf::from(""));
             if let Some(metadata) = find_meta_in_paths(&meta, &paths) {
                 files.insert(hash, (ex, metadata));
+            } else if let Some(metadata) = find_meta_in_paths(&meta, &paths) { 
+                files.insert(hash, (ex, metadata));
             } else {
                 unknown_hashes.push(hash);
             }
         }
         AnalyzeResult { unknown_hashes, files, albums}
     }
+}
+
+fn find_meta_in_fixed_paths(map: &HashMap<PathBuf, Metadata>, paths: &[PathBuf]) -> Option<Metadata> {
+    let regex = regex::Regex::new(r"(.*)-\w+").unwrap();
+    let fixed_paths: Vec<_> = paths.into_iter().map(|p|{
+        let s = p.to_string_lossy();
+        let fixed = regex.replace(s.as_ref(), "$1");
+        PathBuf::from(fixed.as_ref())
+    }).collect();
+
+    find_meta_in_paths(map, &fixed_paths)
 }
 
 fn find_meta_in_paths(map: &HashMap<PathBuf, Metadata>, paths: &[PathBuf]) -> Option<Metadata> {
@@ -375,4 +388,15 @@ fn test_regex() {
     let regex = regex::Regex::new(r"(.*?)\.(.*?)\((\d+)\)").unwrap();
     let real = regex.replace(input, "$1($3).$2");
     assert_eq!(output, real.as_ref())
+}
+
+#[test]
+fn test_regex2() {
+    let input  = "Takeout/Google Фото/Рыбалка/IMG_20170715_142514_EFFECTS-измененный.jpg";
+    let output = "Takeout/Google Фото/Рыбалка/IMG_20170715_142514_EFFECTS.jpg";
+    let regex = regex::Regex::new(r"(.*)-\w+").unwrap();
+    let real = regex.replace(input, "$1");
+    assert_eq!(output, real.as_ref());
+    let real = regex.replace(output, "$1");
+    assert_eq!(output, real.as_ref());
 }
