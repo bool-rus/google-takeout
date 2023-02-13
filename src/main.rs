@@ -227,6 +227,7 @@ impl Library {
             is_duplicate = true;
             self.duplicates_counter += 1;
         }
+        paths.push(path.clone());
 
         if let Some(parent) = path.parent() {
             let album = parent.file_name().map(|s|s.to_string_lossy().to_string()).unwrap_or("UNKNOWN".to_string());
