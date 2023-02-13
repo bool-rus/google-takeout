@@ -181,8 +181,7 @@ impl TarMeta {
 #[derive(Default)]
 struct Library {
     duplicates_counter: u32,
-    files_by_hash: HashMap<FileHash, Option<PathBuf>>,  
-    files_by_path: HashMap<PathBuf, FileHash>, 
+    files_by_hash: HashMap<FileHash, Vec<PathBuf>>,  
     files_by_tar_meta: HashMap<TarMeta, FileHash>,
     albums: HashMap<String, Album>, //
     meta: HashMap<PathBuf, Metadata>,
@@ -212,14 +211,12 @@ impl Library {
         }
     }
     pub fn add_file(&mut self, path: PathBuf, hash: FileHash, size: u64) -> bool {
-        let mut is_duplicate = true;
+        let mut is_duplicate = false;
 
         self.add_file_by_tarmeta(&path, size, hash);
-        self.files_by_hash.entry(hash).or_insert_with(||{
-            is_duplicate = false;
-            path.extension().map(PathBuf::from)
-        });
-        if is_duplicate {
+        let paths = self.files_by_hash.entry(hash).or_default();
+        if !paths.is_empty() {
+            is_duplicate = true;
             self.duplicates_counter += 1;
         }
 
@@ -228,8 +225,6 @@ impl Library {
             let album = self.albums.entry(album).or_default();
             album.files.insert(hash.clone());
         }
-        
-        self.files_by_path.insert(path, hash);
 
         is_duplicate
     }
@@ -237,21 +232,28 @@ impl Library {
     pub fn analyze(self) -> AnalyzeResult {
         let mut files = HashMap::default();
         let mut unknown_hashes = Vec::new();
-        let Library { duplicates_counter, mut files_by_hash, files_by_path, files_by_tar_meta, albums, meta } = self;
-        for (path, hash) in files_by_path {
-            let ex = path.extension().map(PathBuf::from).unwrap_or(PathBuf::from(""));
-            if let Some(x) = files_by_hash.remove(&hash) {
-                if let Some(metadata) = find_meta(&meta, &path) {
-                    files.insert(hash, (ex, metadata));
-                } else {
-                    unknown_hashes.push(hash);
-                }
+        let Library { duplicates_counter, mut files_by_hash, files_by_tar_meta, albums, meta } = self;
+        for (hash, paths) in files_by_hash {
+            let ex = paths.first().unwrap().extension().map(PathBuf::from).unwrap_or(PathBuf::from(""));
+            if let Some(metadata) = find_meta_in_paths(&meta, &paths) {
+                files.insert(hash, (ex, metadata));
+            } else {
+                unknown_hashes.push(hash);
             }
         }
         AnalyzeResult { unknown_hashes, files, albums}
     }
 }
 
+fn find_meta_in_paths(map: &HashMap<PathBuf, Metadata>, paths: &[PathBuf]) -> Option<Metadata> {
+    for path in paths {
+        let meta = find_meta(map, path);
+        if meta.is_some() {
+            return meta;
+        }
+    }
+    None
+}
 fn find_meta(map: &HashMap<PathBuf, Metadata>, path: &PathBuf) -> Option<Metadata> {
     let mut path = path.clone();
     while let Some(next) = next_stem(&path) {
@@ -357,3 +359,4 @@ fn test_format() {
     let dt_str = dt.format("%Y/%m/%d/%Y%m%d_%H%M%S").to_string();
     println!("{dt_str}");
 }
+
