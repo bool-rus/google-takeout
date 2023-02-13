@@ -110,6 +110,13 @@ fn process_json(lib: &mut Library, path: &PathBuf, text: &str) -> Result<()> {
     return Ok(());
 }
 
+fn fix_json_path(path: PathBuf) -> PathBuf {
+    let regex = regex::Regex::new(r"(.*?)\.(.*?)\((\d+)\)").unwrap(); //fix some.jpg(1).json to some(1).jpg.json
+    let pathstr = path.to_string_lossy();
+    let replaced = regex.replace(pathstr.as_ref(), "$1($3).$2");
+    PathBuf::from(replaced.as_ref())
+}
+
 fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -> Result<()> {
 
     let size = entry.size();
@@ -124,6 +131,7 @@ fn process_entry<'a, R: Read + 'a>(lib: &mut Library, mut entry: Entry<'a, R>) -
             log::info!("Founded json: {}", path.to_string_lossy());
             let mut buf = String::with_capacity(size as usize);
             entry.read_to_string(&mut buf)?;
+            let path = fix_json_path(path);
             if let Err(e) = process_json(lib, &path, buf.as_str()) {
                 log::error!("Err on process {}: {e}", path.to_string_lossy());
                 log::trace!("json: {buf}");
@@ -360,3 +368,11 @@ fn test_format() {
     println!("{dt_str}");
 }
 
+#[test]
+fn test_regex() {
+    let input =  "Takeout/Google Фото/Рыбалка/IMG_20170715_142514-EFFECTS.jpg(1).json";
+    let output = "Takeout/Google Фото/Рыбалка/IMG_20170715_142514-EFFECTS(1).jpg.json";
+    let regex = regex::Regex::new(r"(.*?)\.(.*?)\((\d+)\)").unwrap();
+    let real = regex.replace(input, "$1($3).$2");
+    assert_eq!(output, real.as_ref())
+}
