@@ -54,7 +54,7 @@ fn save_album(name: String, album: Album, map: &HashMap<FileHash, (PathBuf, Meta
     let mut file = std::fs::File::create(name)?;
     for hash in album.files {
         if let Some((ex, md)) = map.get(&hash) {
-            let path = make_path(ex, &md.taken_time);
+            let path = make_path(hash, ex, &md.taken_time);
             file.write_all(path.to_string_lossy().as_bytes())?;
             file.write_all("\n".as_bytes())?;
         }
@@ -63,19 +63,18 @@ fn save_album(name: String, album: Album, map: &HashMap<FileHash, (PathBuf, Meta
     Ok(())
 }
 
-fn make_path(extension: &PathBuf, dt: &DateTime) -> PathBuf {
+fn make_path(hash: u64, extension: &PathBuf, dt: &DateTime) -> PathBuf {
     let mut path = PathBuf::from(TAKEOUT);
-    path.push(dt.format(DATE_FORMAT).to_string());
+    path.push(format!("{}_{hash:016x}", dt.format(DATE_FORMAT).to_string()));
     path.with_extension(extension)
-
 }
 
 fn update_folder(result: &AnalyzeResult) -> Result<()> {
-    for (hash, (extension, meta)) in &result.files {
+    for (&hash, (extension, meta)) in &result.files {
         let date = meta.taken_time;
         let mut from_path = PathBuf::from("albums");
         from_path.push(format!("{hash:016x}"));
-        let to_path = make_path(extension, &date);
+        let to_path = make_path(hash, extension, &date);
         log::info!("move {hash:016x} to {}", to_path.to_string_lossy());
         if let Some(parent) = to_path.parent() {
             std::fs::create_dir_all(parent)?;
