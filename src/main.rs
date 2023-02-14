@@ -42,7 +42,7 @@ fn main() {
 
     log::info!("analyse dates");
     let result = lib.analyze();
-    update_folder(&result).unwrap();
+    update_folder(&result);
     log::info!("save albums");
     for (name, album) in result.albums {
         save_album(name, album, &result.files).unwrap();
@@ -69,13 +69,12 @@ fn make_path(hash: u64, extension: &PathBuf, dt: &DateTime) -> PathBuf {
     path.with_extension(extension)
 }
 
-fn update_folder(result: &AnalyzeResult) -> Result<()> {
+fn update_folder(result: &AnalyzeResult) {
     for (&hash, (extension, meta)) in &result.files {
         if let Err(e) = move_file(hash, extension, meta) {
             log::error!("on moving file {hash:016x}: {e}");
         }
     }
-    Ok(())
 }
 
 fn move_file(hash: u64, extension: &PathBuf, meta: &Metadata) -> Result<()> {
@@ -253,7 +252,7 @@ impl Library {
             let ex = paths.first().unwrap().extension().map(PathBuf::from).unwrap_or(PathBuf::from(""));
             if let Some(metadata) = find_meta_in_paths(&meta, &paths) {
                 files.insert(hash, (ex, metadata));
-            } else if let Some(metadata) = find_meta_in_paths(&meta, &paths) { 
+            } else if let Some(metadata) = find_meta_in_fixed_paths(&meta, &paths) { 
                 files.insert(hash, (ex, metadata));
             } else {
                 unknown_hashes.push(hash);
