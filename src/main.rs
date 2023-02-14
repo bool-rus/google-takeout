@@ -72,7 +72,7 @@ fn make_path(hash: u64, extension: &PathBuf, dt: &DateTime) -> PathBuf {
 fn update_folder(result: &AnalyzeResult) -> Result<()> {
     for (&hash, (extension, meta)) in &result.files {
         let date = meta.taken_time;
-        let mut from_path = PathBuf::from("albums");
+        let mut from_path = PathBuf::from(TAKEOUT);
         from_path.push(format!("{hash:016x}"));
         let to_path = make_path(hash, extension, &date);
         log::info!("move {hash:016x} to {}", to_path.to_string_lossy());
