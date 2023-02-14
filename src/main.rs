@@ -73,9 +73,10 @@ fn make_path(extension: &PathBuf, dt: &DateTime) -> PathBuf {
 fn update_folder(result: &AnalyzeResult) -> Result<()> {
     for (hash, (extension, meta)) in &result.files {
         let date = meta.taken_time;
-        let mut from_path = PathBuf::from(TAKEOUT);
+        let mut from_path = PathBuf::from("albums");
         from_path.push(format!("{hash:016x}"));
         let to_path = make_path(extension, &date);
+        log::info!("move {hash:016x} to {}", to_path.to_string_lossy());
         if let Some(parent) = to_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
