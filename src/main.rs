@@ -17,7 +17,7 @@ type DateTime = chrono::DateTime<chrono::Local>;
 
 const TAKEOUT: &str = "takeout";
 const CURRENT: &str = "current";
-const DATE_FORMAT: &str = "%Y/%m/%d/%Y%m%d_%H%M%S";
+const DATE_FORMAT: &str = "%Y/%m/%d/%H%M%S";
 
 
 fn main() {
@@ -71,18 +71,25 @@ fn make_path(hash: u64, extension: &PathBuf, dt: &DateTime) -> PathBuf {
 
 fn update_folder(result: &AnalyzeResult) -> Result<()> {
     for (&hash, (extension, meta)) in &result.files {
-        let date = meta.taken_time;
-        let mut from_path = PathBuf::from(TAKEOUT);
-        from_path.push(format!("{hash:016x}"));
-        let to_path = make_path(hash, extension, &date);
-        log::info!("move {hash:016x} to {}", to_path.to_string_lossy());
-        if let Some(parent) = to_path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if let Err(e) = move_file(hash, extension, meta) {
+            log::error!("on moving file {hash:016x}: {e}");
         }
-        std::fs::rename(from_path, to_path.clone())?;
-        let st: SystemTime = date.into();
-        filetime::set_file_mtime(to_path, st.into())?;
     }
+    Ok(())
+}
+
+fn move_file(hash: u64, extension: &PathBuf, meta: &Metadata) -> Result<()> {
+    let date = meta.taken_time;
+    let mut from_path = PathBuf::from(TAKEOUT);
+    from_path.push(format!("{hash:016x}"));
+    let to_path = make_path(hash, extension, &date);
+    log::info!("move {hash:016x} to {}", to_path.to_string_lossy());
+    if let Some(parent) = to_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(from_path, to_path.clone())?;
+    let st: SystemTime = date.into();
+    filetime::set_file_mtime(to_path, st.into())?;
     Ok(())
 }
 
